@@ -201,16 +201,23 @@ def test_deve_atualizar_usuario_existente_com_sucesso(usuarios_client, usuario_c
     """
     usuario_id = usuario_criado["id"]
 
+    #print("ID criado:", usuario_id)
+
+    busca_antes = usuarios_client.buscar_usuario_por_id(usuario_id)
+    #print("GET antes do PUT:", busca_antes.status_code, busca_antes.json())
+
     payload_atualizado = gerar_usuario_valido()
     payload_atualizado["nome"] = "Usuario Atualizado Pytest"
 
     response = usuarios_client.atualizar_usuario(usuario_id, payload_atualizado)
     body = response.json()
+    #print("PUT:", response.status_code, body)
 
     assert response.status_code == 200
     assert body["message"] == "Registro alterado com sucesso"
 
     busca_usuario_atualizado = usuarios_client.buscar_usuario_por_id(usuario_id)
+    #print("GET depois do PUT:", busca_usuario_atualizado.status_code, busca_usuario_atualizado.json())
     body_busca = busca_usuario_atualizado.json()
 
     assert busca_usuario_atualizado.status_code == 200
