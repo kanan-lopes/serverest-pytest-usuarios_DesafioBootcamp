@@ -25,3 +25,16 @@ def gerar_usuario_valido(administrador="false"):
         "password": "teste123",
         "administrador": administrador
     }
+
+
+def gerar_credenciais_login(email, password):
+    """
+    Gera um payload de login a partir de email e password fornecidos.
+
+    Separa a construção do payload de login da criação do usuário,
+    permitindo reutilizar credenciais já cadastradas.
+    """
+    return {
+        "email": email,
+        "password": password
+    }

@@ -2,18 +2,22 @@ import os
 import pytest
 from dotenv import load_dotenv
 
-from clients.usuarios_client import UsuariosClient #objeto que contém os métodos pra chamar a API
-from utils.data_factory import gerar_usuario_valido #função que cria dados válidos
+# objeto que contém os métodos pra chamar a API
+from clients.usuarios_client import UsuariosClient
+# cliente para o endpoint /login
+from clients.login_client import LoginClient
+from utils.data_factory import gerar_usuario_valido  # função que cria dados válidos
 
 """
-Lembrando que este arquivo é gerado automaticamente pelo pytest, daí podemos usar 
-def test_algguma_coisa(usuarios_client), sem precisar importar manualmente
+Lembrando que este arquivo é gerado automaticamente pelo pytest, daí podemos usar
+def test_alguma_coisa(usuarios_client), sem precisar importar manualmente.
 """
 
-load_dotenv() #carregando variáveis do ambiente env example
+load_dotenv()  # carregando variáveis do arquivo .env
 
 
-@pytest.fixture(scope="session") # session -> fixture criada uma vez por execução completa
+# session -> fixture criada uma vez por execução completa
+@pytest.fixture(scope="session")
 def base_url():
     """
     Define a URL base da API.
@@ -32,11 +36,19 @@ def usuarios_client(base_url):
 
 
 @pytest.fixture
+def login_client(base_url):
+    """
+    Fixture que fornece uma instância do cliente de login.
+    """
+    return LoginClient(base_url)
+
+
+@pytest.fixture
 def usuario_payload():
     """
     Fixture que retorna um payload válido para cadastro de usuário.
     Cada chamada gera um email único, garantindo independência entre testes. Isso é mt importante para
-    o código , pois evita o problema de "email já está sendo usado"
+    o código, pois evita o problema de "email já está sendo usado".
     """
     return gerar_usuario_valido()
 
@@ -50,10 +62,11 @@ def usuario_criado(usuarios_client):
     """
     payload = gerar_usuario_valido()
 
-    response = usuarios_client.cadastrar_usuario(payload) #cadastro na api
-    assert response.status_code == 201 #requisição bem sucedida
+    response = usuarios_client.cadastrar_usuario(payload)  # cadastro na api
+    assert response.status_code == 201  # requisição bem sucedida
 
-    usuario_id = response.json()["_id"] #esse id que é utilizado pelos testes de busca, att, exclusão
+    # id utilizado pelos testes de busca, att, exclusão
+    usuario_id = response.json()["_id"]
 
     yield {
         "id": usuario_id,
@@ -64,6 +77,52 @@ def usuario_criado(usuarios_client):
     O valor do yield     → é entregue para o teste
     Tudo depois do yield → acontece depois do teste
     """
-    # Limpeza pós-teste. Se fosse se um return não teríamos a limpeza
+    # Limpeza pós-teste. Se fosse um return não teríamos a limpeza.
     # Caso o próprio teste já tenha excluído o usuário, essa chamada pode retornar 200 ou 400.
+    usuarios_client.excluir_usuario(usuario_id)
+
+
+@pytest.fixture
+def usuario_admin_criado(usuarios_client):
+    """
+    Cria um usuário administrador antes do teste e o remove depois.
+
+    Útil para testes de login que precisam de um administrador real
+    criado dinamicamente, evitando dependência de dados fixos da base.
+    """
+    payload = gerar_usuario_valido(administrador="true")
+
+    response = usuarios_client.cadastrar_usuario(payload)
+    assert response.status_code == 201
+
+    usuario_id = response.json()["_id"]
+
+    yield {
+        "id": usuario_id,
+        "payload": payload
+    }
+
+    usuarios_client.excluir_usuario(usuario_id)
+
+
+@pytest.fixture
+def usuario_comum_criado(usuarios_client):
+    """
+    Cria um usuário não-administrador antes do teste e o remove depois.
+
+    Útil para testes de login que precisam de um usuário comum criado
+    dinamicamente, evitando dependência de dados fixos da base.
+    """
+    payload = gerar_usuario_valido(administrador="false")
+
+    response = usuarios_client.cadastrar_usuario(payload)
+    assert response.status_code == 201
+
+    usuario_id = response.json()["_id"]
+
+    yield {
+        "id": usuario_id,
+        "payload": payload
+    }
+
     usuarios_client.excluir_usuario(usuario_id)
