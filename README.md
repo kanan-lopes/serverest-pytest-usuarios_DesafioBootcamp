@@ -55,13 +55,13 @@ serverest-pytest-usuarios/
 Clone o repositório:
 
 ```bash
-git clone https://github.com/SEU-USUARIO/serverest-pytest-usuarios.git
+git clone git clone https://github.com/kanan-lopes/serverest-pytest-usuarios_DesafioBootcamp.git
 ```
 
 Acesse a pasta do projeto:
 
 ```bash
-cd serverest-pytest-usuarios
+cd serverest-pytest-usuarios_DesafioBootcamp
 ```
 
 Crie o ambiente virtual:
