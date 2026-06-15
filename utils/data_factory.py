@@ -67,3 +67,25 @@ def gerar_produto_valido():
         "descricao": "Produto gerado automaticamente pelo Pytest",
         "quantidade": 50
     }
+
+
+def gerar_carrinho_valido(produto_id, quantidade=2):
+    """
+    Gera um payload válido para criação de carrinho.
+
+    A ServeRest exige que o campo 'produtos' seja uma lista de objetos
+    contendo 'idProduto' e 'quantidade'. A quantidade deve ser menor
+    ou igual ao estoque do produto.
+
+    Parâmetros:
+    - produto_id: ID do produto a ser adicionado ao carrinho
+    - quantidade: quantidade desejada (padrão: 2, bem abaixo do estoque padrão de 50)
+    """
+    return {
+        "produtos": [
+            {
+                "idProduto": produto_id,
+                "quantidade": quantidade
+            }
+        ]
+    }

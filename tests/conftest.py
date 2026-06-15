@@ -8,10 +8,13 @@ from clients.usuarios_client import UsuariosClient
 from clients.login_client import LoginClient
 # cliente para o endpoint /produtos
 from clients.produtos_client import ProdutosClient
+# cliente para o endpoint /carrinhos
+from clients.carrinhos_client import CarrinhosClient
 from utils.data_factory import (
     gerar_usuario_valido,
     gerar_credenciais_login,
     gerar_produto_valido,
+    gerar_carrinho_valido,
 )
 
 """
@@ -63,6 +66,14 @@ def produtos_client(base_url):
     Fixture que fornece uma instância do cliente de produtos.
     """
     return ProdutosClient(base_url)
+
+
+@pytest.fixture
+def carrinhos_client(base_url):
+    """
+    Fixture que fornece uma instância do cliente de carrinhos.
+    """
+    return CarrinhosClient(base_url)
 
 
 # ─────────────────────────────────────────────
@@ -163,8 +174,8 @@ def token_admin(usuarios_client, login_client):
     Cria um usuário administrador, realiza login e retorna o token Bearer.
     Remove o usuário ao final do teste.
 
-    Essa fixture é usada pelos testes de produtos que exigem permissão de admin
-    para cadastrar, atualizar e excluir produtos.
+    Essa fixture é usada pelos testes de produtos e carrinhos que exigem
+    permissão de admin ou simplesmente um usuário autenticado com poderes de admin.
     """
     payload = gerar_usuario_valido(administrador="true")
 
@@ -192,8 +203,8 @@ def token_usuario_comum(usuarios_client, login_client):
     Cria um usuário não-administrador, realiza login e retorna o token Bearer.
     Remove o usuário ao final do teste.
 
-    Essa fixture é usada pelos testes de produtos que verificam que
-    um usuário comum NÃO tem permissão para cadastrar, atualizar e excluir produtos.
+    Essa fixture é usada pelos testes que verificam que um usuário comum
+    NÃO tem permissão para cadastrar, atualizar e excluir produtos.
     """
     payload = gerar_usuario_valido(administrador="false")
 
@@ -251,3 +262,101 @@ def produto_criado(produtos_client, token_admin):
     # Limpeza pós-teste. Se o próprio teste já excluiu o produto,
     # a chamada pode retornar 200 (nenhum registro excluído) sem problemas.
     produtos_client.excluir_produto(produto_id, token=token_admin)
+
+
+# ─────────────────────────────────────────────
+# Fixtures de carrinhos
+# ─────────────────────────────────────────────
+
+@pytest.fixture
+def usuario_com_token_e_produto(usuarios_client, login_client, produtos_client, carrinhos_client):
+    """
+    Cria um usuário administrador, faz login para obter o token e cria um produto.
+    Remove tudo ao final do teste.
+
+    Essa fixture empacota os três recursos necessários para os testes de carrinho:
+    usuário autenticado + produto disponível no estoque.
+
+    Retorna um dicionário com:
+    - token: Bearer token do usuário
+    - usuario_id: ID do usuário (para limpeza)
+    - produto_id: ID do produto disponível
+    - produto_quantidade_estoque: quantidade original do produto no estoque
+    """
+    # Cria usuário admin
+    u_payload = gerar_usuario_valido(administrador="true")
+    r_usuario = usuarios_client.cadastrar_usuario(u_payload)
+    assert r_usuario.status_code == 201
+    usuario_id = r_usuario.json()["_id"]
+
+    # Faz login
+    credentials = gerar_credenciais_login(
+        u_payload["email"], u_payload["password"])
+    r_login = login_client.fazer_login(credentials)
+    assert r_login.status_code == 200
+    token = r_login.json()["authorization"]
+
+    # Cria produto
+    p_payload = gerar_produto_valido()
+    r_produto = produtos_client.cadastrar_produto(p_payload, token=token)
+    assert r_produto.status_code == 201
+    produto_id = r_produto.json()["_id"]
+
+    yield {
+        "token": token,
+        "usuario_id": usuario_id,
+        "produto_id": produto_id,
+        "produto_quantidade_estoque": p_payload["quantidade"]
+    }
+
+    # Limpeza: cancela carrinho aberto (se houver), remove produto e usuário.
+    # Cancelar garante reposição do estoque caso o teste não tenha feito limpeza.
+    carrinhos_client.cancelar_compra(token=token)
+    produtos_client.excluir_produto(produto_id, token=token)
+    usuarios_client.excluir_usuario(usuario_id)
+
+
+@pytest.fixture
+def carrinho_criado(carrinhos_client, produtos_client, usuario_com_token_e_produto):
+    """
+    Cria um carrinho antes do teste e garante sua remoção ao final.
+
+    Depende da fixture usuario_com_token_e_produto para ter
+    um usuário autenticado e um produto disponível.
+
+    O estoque original do produto é capturado ANTES de criar o carrinho,
+    permitindo que os testes de concluir/cancelar verifiquem variações corretas.
+
+    Retorna um dicionário com:
+    - carrinho_id: ID do carrinho criado
+    - token: token do usuário dono do carrinho
+    - produto_id: ID do produto adicionado ao carrinho
+    - quantidade_no_carrinho: quantidade do produto no carrinho
+    - estoque_original: quantidade do produto antes de criar o carrinho
+    """
+    token = usuario_com_token_e_produto["token"]
+    produto_id = usuario_com_token_e_produto["produto_id"]
+    quantidade = 2
+
+    # Captura o estoque ANTES de criar o carrinho (que vai decrementá-lo)
+    estoque_original = produtos_client.buscar_produto_por_id(produto_id).json()[
+        "quantidade"]
+
+    payload = gerar_carrinho_valido(produto_id, quantidade=quantidade)
+    response = carrinhos_client.criar_carrinho(payload, token=token)
+    assert response.status_code == 201
+
+    carrinho_id = response.json()["_id"]
+
+    yield {
+        "carrinho_id": carrinho_id,
+        "token": token,
+        "produto_id": produto_id,
+        "quantidade_no_carrinho": quantidade,
+        "estoque_original": estoque_original
+    }
+
+    # Limpeza: cancela a compra para repor o estoque e remover o carrinho.
+    # Se o próprio teste já concluiu ou cancelou, esta chamada retornará
+    # "Não foi encontrado carrinho para esse usuário" sem causar erro.
+    carrinhos_client.cancelar_compra(token=token)
