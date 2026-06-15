@@ -18,7 +18,7 @@ O objetivo desta suíte expandida é **cobrir os demais endpoints da ServeRest**
 
 - Validar autenticação via `/login` e o uso do token JWT nos endpoints protegidos ✅
 - Cobrir o CRUD completo de `/produtos` com e sem autenticação ✅
-- Cobrir o ciclo de vida do carrinho em `/carrinhos`, incluindo regras de negócio (carrinho único por usuário, concluir e cancelar compra) 🔲
+- Cobrir o ciclo de vida do carrinho em `/carrinhos`, incluindo regras de negócio (carrinho único por usuário, concluir e cancelar compra) ✅
 - Detectar regressões nos fluxos críticos da API a cada execução da suíte
 
 ---
@@ -33,8 +33,8 @@ O objetivo desta suíte expandida é **cobrir os demais endpoints da ServeRest**
 | **Positivo (happy path)** | Fluxo com dados válidos e pré-condições atendidas | Todas as operações bem-sucedidas |
 | **Negativo** | Dados inválidos, campos ausentes, IDs inexistentes | Validações de erro (4xx) |
 | **Contrato** | Verifica presença e tipo dos campos na resposta | Campos obrigatórios em todos os bodies |
-| **Fluxo integrado** | Sequência de chamadas que simula um caso de uso real | Login → criar produto → adicionar ao carrinho → concluir compra |
-| **Segurança básica** | Tentativa de acessar recursos protegidos sem token ou com token sem permissão | Endpoints que exigem autenticação ou perfil admin |
+| **Regra de negócio** | Valida restrições específicas do domínio | Carrinho único por usuário, estoque insuficiente, decremento/reposição de estoque |
+| **Segurança básica** | Tentativa de excluir produto com carrinho aberto | Não foi automatizada nesta etapa; pode ser adicionada em investigação futura por envolver estado compartilhado entre produto e carrinho |
 
 ### 2.2 Camada de teste
 
@@ -51,15 +51,17 @@ Todos os testes operam na **camada de API (integração contra ambiente real)**,
 | **pytest-html** | Geração de relatório HTML após execução |
 | **python-dotenv** | Configuração da `BASE_URL` via variável de ambiente |
 | **uuid4** | Geração de dados únicos para isolamento de testes |
+| **Postman** | Investigação exploratória manual e validação de contratos |
 
 ### 2.4 Padrões adotados
 
-- **Client pattern:** cada endpoint tem seu próprio client (`UsuariosClient`, `LoginClient`, `ProdutosClient`), centralizando as chamadas HTTP e evitando `requests.*` direto nos testes
+- **Client pattern:** cada endpoint tem seu próprio client (`UsuariosClient`, `LoginClient`, `ProdutosClient`, `CarrinhosClient`), centralizando as chamadas HTTP e evitando `requests.*` direto nos testes
 - **Data factory:** funções em `data_factory.py` para geração de payloads válidos por endpoint, todos com dados únicos via `uuid4`
 - **Fixtures com yield:** pré-condição antes do `yield`, limpeza depois — garantindo isolamento mesmo em caso de falha do teste
 - **Marcadores:** cada endpoint tem seu marcador registrado no `pytest.ini` (`usuarios`, `login`, `produtos`, `carrinhos`)
 - **Independência total:** nenhum teste depende de estado deixado por outro; cada um cria e limpa seus próprios dados
 - **Tokens dinâmicos:** as fixtures `token_admin` e `token_usuario_comum` criam usuários, fazem login e entregam o token Bearer ao teste, sem depender de credenciais fixas da base
+- **Estoque original capturado na fixture:** a fixture `carrinho_criado` captura o estoque antes de criar o carrinho, permitindo validar efeitos de concluir e cancelar compra de forma precisa
 
 ---
 
@@ -80,16 +82,15 @@ Todos os testes operam na **camada de API (integração contra ambiente real)**,
 | `/produtos/{id}` | GET | Busca por ID válido, ID inexistente | 2 |
 | `/produtos/{id}` | PUT | Atualização válida (admin), sem token, token de não-admin | 3 |
 | `/produtos/{id}` | DELETE | Exclusão válida (admin), sem token, ID inexistente | 3 |
+| `/carrinhos` | GET | Listagem sem autenticação | 1 |
+| `/carrinhos` | POST | Criação válida, sem token, segundo carrinho (regra de negócio), produto inexistente, quantidade acima do estoque | 5 |
+| `/carrinhos/{id}` | GET | Busca por ID válido, ID inexistente | 2 |
+| `/carrinhos/concluir-compra` | DELETE | Concluir compra (estoque decrementado), sem carrinho aberto, sem token | 3 |
+| `/carrinhos/cancelar-compra` | DELETE | Cancelar compra (estoque reposto), sem carrinho aberto, sem token | 3 |
 
-**Total atual: 37 testes**
+**Total atual: 51 testes**
 
-### 3.2 O que será coberto (planejado)
-
-| Endpoint | Métodos | Prioridade |
-| --- | --- | --- |
-| `/carrinhos` | GET, POST, GET/{id}, DELETE/concluir-compra, DELETE/cancelar-compra | Alta |
-
-### 3.3 O que ficou fora do escopo
+### 3.2 O que ficou fora do escopo
 
 | Item | Justificativa |
 | --- | --- |
@@ -98,7 +99,8 @@ Todos os testes operam na **camada de API (integração contra ambiente real)**,
 | Testes de segurança avançados (pentest, injection) | Escopo além do contexto de QA funcional |
 | Filtros/queries avançados por parâmetro | Cobertura básica contempla os campos mais comuns; filtros combinados podem ser adicionados em iteração futura |
 | Testes de contrato formal (ex.: Pact) | Não há consumer separado no projeto |
-| Cenário de produto em carrinho (DELETE /produtos) | Depende de implementação do módulo de carrinhos; será coberto nos fluxos integrados |
+| Tentativa de excluir produto com carrinho aberto | Exige estado compartilhado entre módulos; coberto como observação no bug report |
+| Fluxos integrados multi-endpoint (F-01, F-02, F-03) | Os cenários essenciais já estão cobertos nos testes de concluir/cancelar; fluxos completos podem ser adicionados em iteração futura |
 
 ---
 
@@ -171,64 +173,67 @@ Todos os testes operam na **camada de API (integração contra ambiente real)**,
 
 **Fixtures utilizadas:** `produtos_client`, `token_admin`, `token_usuario_comum`, `produto_payload`, `produto_criado`
 
-> **Descoberta durante implementação:** a ServeRest valida o formato do ID antes de buscar na base. IDs fora do padrão de 16 caracteres alfanuméricos retornam 400 de validação de formato. Com IDs no formato correto mas inexistentes, o comportamento é o mesmo de `/usuarios`: status 200 com "Nenhum registro excluído". O teste de exclusão de inexistente usa `uuid4().hex[:16]` para garantir ID no formato válido.
+> **Descoberta durante implementação:** a ServeRest valida o formato do ID antes de buscar na base. IDs fora do padrão de 16 caracteres alfanuméricos retornam 400 de validação de formato. Com IDs no formato correto mas inexistentes, o comportamento é o mesmo de `/usuarios`: status 200 com "Nenhum registro excluído". Esse comportamento foi documentado na [Issue #1](https://github.com/kanan-lopes/serverest-pytest-usuarios_DesafioBootcamp/issues/1) após investigação com Postman.
 
 ---
 
-## 5. Cenários a Implementar
+### 4.3 `/carrinhos` — ✅ Implementado
 
-### 5.1 `/carrinhos` — 🔲 Pendente
-
-**Métodos:** GET · POST · GET `/{id}` · DELETE `/concluir-compra` · DELETE `/cancelar-compra`
+**Arquivo:** `tests/test_carrinhos.py` | **Marker:** `@pytest.mark.carrinhos`
 
 #### GET /carrinhos
 
-| # | Cenário | Tipo | Status esperado |
+| # | Função de teste | Tipo | Status esperado |
 | --- | --- | --- | --- |
-| C-01 | Listar todos os carrinhos | Positivo | 200 + lista + campo `quantidade` |
+| C-01 | `test_deve_listar_carrinhos_sem_autenticacao` | Positivo | 200 + lista + campo `quantidade` |
 
 #### POST /carrinhos
 
-| # | Cenário | Tipo | Status esperado |
+| # | Função de teste | Tipo | Status esperado |
 | --- | --- | --- | --- |
-| C-02 | Criar carrinho com produto válido e token | Positivo | 201 + `_id` |
-| C-03 | Criar carrinho sem autenticação | Segurança | 401 |
-| C-04 | Criar segundo carrinho para o mesmo usuário | Negativo | 400 |
-| C-05 | Criar carrinho com produto inexistente | Negativo | 400 |
-| C-06 | Criar carrinho com quantidade maior que o estoque | Negativo | 400 |
-| C-07 | Criar carrinho sem campo `produtos` | Negativo | 400 |
-| C-08 | Criar carrinho com lista de produtos vazia | Negativo | 400 |
+| C-02 | `test_deve_criar_carrinho_com_produto_valido` | Positivo | 201 + `_id` |
+| C-03 | `test_nao_deve_criar_carrinho_sem_autenticacao` | Segurança | 401 |
+| C-04 | `test_nao_deve_criar_segundo_carrinho_para_mesmo_usuario` | Regra de negócio | 400 |
+| C-05 | `test_nao_deve_criar_carrinho_com_produto_inexistente` | Negativo | 400 |
+| C-06 | `test_nao_deve_criar_carrinho_com_quantidade_maior_que_estoque` | Negativo | 400 |
 
 #### GET /carrinhos/{id}
 
-| # | Cenário | Tipo | Status esperado |
+| # | Função de teste | Tipo | Status esperado |
 | --- | --- | --- | --- |
-| C-09 | Buscar carrinho por ID válido | Positivo | 200 + dados do carrinho |
-| C-10 | Buscar carrinho com ID inexistente | Negativo | 400 |
+| C-07 | `test_deve_buscar_carrinho_por_id_valido` | Positivo | 200 + dados do carrinho |
+| C-08 | `test_nao_deve_buscar_carrinho_com_id_inexistente` | Negativo | 400 |
 
 #### DELETE /carrinhos/concluir-compra
 
-| # | Cenário | Tipo | Status esperado |
+| # | Função de teste | Tipo | Status esperado |
 | --- | --- | --- | --- |
-| C-11 | Concluir compra com carrinho existente | Positivo | 200 + estoque decrementado |
-| C-12 | Concluir compra sem ter carrinho aberto | Negativo | 200 + "Não foi encontrado carrinho" |
-| C-13 | Concluir compra sem autenticação | Segurança | 401 |
+| C-09 | `test_deve_concluir_compra_e_decrementar_estoque` | Positivo | 200 + estoque decrementado |
+| C-10 | `test_deve_retornar_mensagem_ao_concluir_compra_sem_carrinho` | Negativo | 200 + "Não foi encontrado carrinho" |
+| C-11 | `test_nao_deve_concluir_compra_sem_autenticacao` | Segurança | 401 |
 
 #### DELETE /carrinhos/cancelar-compra
 
-| # | Cenário | Tipo | Status esperado |
+| # | Função de teste | Tipo | Status esperado |
 | --- | --- | --- | --- |
-| C-14 | Cancelar compra com carrinho existente (estoque deve ser reposto) | Positivo | 200 + estoque reposto |
-| C-15 | Cancelar compra sem ter carrinho aberto | Negativo | 200 + "Não foi encontrado carrinho" |
-| C-16 | Cancelar compra sem autenticação | Segurança | 401 |
+| C-12 | `test_deve_cancelar_compra_e_repor_estoque` | Positivo | 200 + estoque reposto |
+| C-13 | `test_deve_retornar_mensagem_ao_cancelar_compra_sem_carrinho` | Negativo | 200 + "Não foi encontrado carrinho" |
+| C-14 | `test_nao_deve_cancelar_compra_sem_autenticacao` | Segurança | 401 |
 
-### 5.2 Fluxos integrados (end-to-end via API)
+**Fixtures utilizadas:** `carrinhos_client`, `produtos_client`, `usuario_com_token_e_produto`, `carrinho_criado`
 
-| # | Fluxo | Cenário |
-| --- | --- | --- |
-| F-01 | Ciclo completo de compra | Login → criar produto → criar carrinho → concluir compra → verificar estoque decrementado |
-| F-02 | Ciclo de cancelamento | Login → criar produto → criar carrinho → cancelar compra → verificar estoque reposto |
-| F-03 | Produto em uso | Login → criar produto → adicionar ao carrinho → tentar excluir produto → verificar 400 |
+> **Detalhe de implementação:** a fixture `carrinho_criado` captura o estoque original do produto *antes* de criar o carrinho (que decrementa o estoque ao ser criado). Isso permite que os testes de concluir e cancelar validem a variação correta usando o estoque de referência.
+
+---
+
+## 5. Investigação Exploratória e Bug Report
+
+Além dos testes automatizados, foi realizada uma **investigação manual exploratória** usando o Postman para verificar comportamentos da API.
+
+**Comportamento identificado:** ao tentar excluir um recurso por um ID válido (16 chars alfanuméricos) mas inexistente na base, os endpoints `/usuarios` e `/produtos` retornam **200 OK** com "Nenhum registro excluído", em vez de um código 4xx que indicaria explicitamente a ausência do recurso.
+
+**Resultado:** documentado na Issue #1 do repositório:
+[DELETE retorna 200 OK ao tentar excluir recurso inexistente](https://github.com/kanan-lopes/serverest-pytest-usuarios_DesafioBootcamp/issues/1)
 
 ---
 
@@ -279,22 +284,22 @@ serverest-pytest-usuarios/
 │   ├── usuarios_client.py       ✅ implementado
 │   ├── login_client.py          ✅ implementado
 │   ├── produtos_client.py       ✅ implementado
-│   ├── carrinhos_client.py      🔲 a criar
+│   ├── carrinhos_client.py      ✅ implementado
 │   └── __init__.py
 │
 ├── tests/
-│   ├── conftest.py              ✅ fixtures de infra, usuários, tokens e produtos
+│   ├── conftest.py              ✅ fixtures de infra, usuários, tokens, produtos e carrinhos
 │   ├── test_usuarios.py         ✅ 12 testes
 │   ├── test_login.py            ✅ 8 testes
 │   ├── test_produtos.py         ✅ 17 testes
-│   └── test_carrinhos.py        🔲 a criar
+│   └── test_carrinhos.py        ✅ 14 testes
 │
 ├── utils/
-│   ├── data_factory.py          ✅ geradores de usuário, credenciais e produto
+│   ├── data_factory.py          ✅ geradores de usuário, credenciais, produto e carrinho
 │   └── __init__.py
 │
 ├── .env.example
-├── pytest.ini                   ✅ markers: usuarios, login, produtos + carrinhos (a adicionar)
+├── pytest.ini                   ✅ markers: usuarios, login, produtos, carrinhos
 ├── requirements.txt
 ├── README.md
 └── PLANO-DE-TESTES.md           ✅ este arquivo
@@ -304,11 +309,10 @@ serverest-pytest-usuarios/
 
 ## 8. Resumo de Cobertura
 
-| Endpoint | Implementados | Planejados | Total |
+| Endpoint | Implementados | Pendentes | Total |
 | --- | --- | --- | --- |
 | `/usuarios` | 12 | 0 | **12** |
 | `/login` | 8 | 0 | **8** |
 | `/produtos` | 17 | 0 | **17** |
-| `/carrinhos` | 0 | 16 | **16** |
-| Fluxos integrados | 0 | 3 | **3** |
-| **Total** | **37** | **19** | **56** |
+| `/carrinhos` | 14 | 0 | **14** |
+| **Total** | **51** | **0** | **51** |
