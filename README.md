@@ -2,6 +2,8 @@
 
 Projeto de automação de testes para a API **ServeRest**, cobrindo os endpoints de **Usuários**, **Login**, **Produtos** e **Carrinhos**, utilizando **Python**, **Requests** e **Pytest**.
 
+A suíte também contempla testes de contrato com **JSON Schema** e execução automática via **GitHub Actions** a cada push ou pull request.
+
 API utilizada:
 
 ```text
@@ -26,6 +28,8 @@ Endpoints cobertos:
 * Requests
 * Python Dotenv
 * Pytest HTML
+* jsonschema
+* GitHub Actions
 * Postman
 
 ---
@@ -35,6 +39,10 @@ Endpoints cobertos:
 ```text
 serverest-pytest-usuarios/
 │
+├── .github/
+│   └── workflows/
+│       └── tests.yml           # pipeline CI/CD — roda a suíte a cada push/PR
+│
 ├── clients/
 │   ├── usuarios_client.py      # chamadas HTTP para /usuarios
 │   ├── login_client.py         # chamadas HTTP para /login
@@ -42,12 +50,20 @@ serverest-pytest-usuarios/
 │   ├── carrinhos_client.py     # chamadas HTTP para /carrinhos
 │   └── __init__.py
 │
+├── schemas/
+│   ├── usuarios_schema.py      # JSON Schemas para /usuarios
+│   ├── login_schema.py         # JSON Schemas para /login
+│   ├── produtos_schema.py      # JSON Schemas para /produtos
+│   ├── carrinhos_schema.py     # JSON Schemas para /carrinhos
+│   └── __init__.py
+│
 ├── tests/
 │   ├── conftest.py             # fixtures compartilhadas
-│   ├── test_usuarios.py        # 12 testes do endpoint /usuarios
-│   ├── test_login.py           # 8 testes do endpoint /login
-│   ├── test_produtos.py        # 17 testes do endpoint /produtos
-│   └── test_carrinhos.py       # 14 testes do endpoint /carrinhos
+│   ├── test_usuarios.py        # 12 testes funcionais de /usuarios
+│   ├── test_login.py           # 8 testes funcionais de /login
+│   ├── test_produtos.py        # 17 testes funcionais de /produtos
+│   ├── test_carrinhos.py       # 14 testes funcionais de /carrinhos
+│   └── test_contratos.py       # 11 testes de contrato via JSON Schema
 │
 ├── utils/
 │   ├── data_factory.py         # geradores de payloads dinâmicos
@@ -124,6 +140,7 @@ pytest tests/test_usuarios.py
 pytest tests/test_login.py
 pytest tests/test_produtos.py
 pytest tests/test_carrinhos.py
+pytest tests/test_contratos.py
 ```
 
 Executar por marcador:
@@ -133,17 +150,19 @@ pytest -m usuarios
 pytest -m login
 pytest -m produtos
 pytest -m carrinhos
+pytest -m contrato
 ```
 
 Executar um teste específico:
 
 ```bash
-pytest tests/test_carrinhos.py::test_deve_concluir_compra_e_decrementar_estoque -vv
+pytest tests/test_contratos.py::test_schema_listar_produtos -vv
 ```
 
 Executar testes filtrando pelo nome:
 
 ```bash
+pytest -k "schema" -vv
 pytest -k "cadastrar" -vv
 pytest -k "admin" -vv
 pytest -k "carrinho" -vv
@@ -155,7 +174,7 @@ Exibir prints durante a execução:
 pytest -s
 ```
 
-Gerar relatório HTML com Pytest HTML:
+Gerar relatório HTML:
 
 ```bash
 pytest -vv --html=reports/relatorio.html --self-contained-html
@@ -171,7 +190,7 @@ reports/relatorio.html
 
 ## Testes implementados
 
-### `/usuarios` — 12 testes
+### `/usuarios` — 12 testes funcionais
 
 | Cenário                       | Teste                                                        | Método | Endpoint         |
 | ----------------------------- | ------------------------------------------------------------ | ------ | ---------------- |
@@ -190,7 +209,7 @@ reports/relatorio.html
 
 ---
 
-### `/login` — 8 testes
+### `/login` — 8 testes funcionais
 
 | Cenário                               | Teste                                             | Método | Endpoint |
 | ------------------------------------- | ------------------------------------------------- | ------ | -------- |
@@ -207,7 +226,7 @@ Os testes de login válido criam usuários dinamicamente via `/usuarios` e os re
 
 ---
 
-### `/produtos` — 17 testes
+### `/produtos` — 17 testes funcionais
 
 | Cenário                          | Teste                                                        | Método | Endpoint         |
 | -------------------------------- | ------------------------------------------------------------ | ------ | ---------------- |
@@ -233,7 +252,7 @@ Os tokens de admin e de usuário comum são obtidos dinamicamente: cada fixture 
 
 ---
 
-### `/carrinhos` — 14 testes
+### `/carrinhos` — 14 testes funcionais
 
 | Cenário                               | Teste                                                           | Método | Endpoint                     |
 | ------------------------------------- | --------------------------------------------------------------- | ------ | ---------------------------- |
@@ -252,35 +271,52 @@ Os tokens de admin e de usuário comum são obtidos dinamicamente: cada fixture 
 | Cancelar sem carrinho aberto          | `test_deve_retornar_mensagem_ao_cancelar_compra_sem_carrinho`   | DELETE | `/carrinhos/cancelar-compra` |
 | Cancelar sem token                    | `test_nao_deve_cancelar_compra_sem_autenticacao`                | DELETE | `/carrinhos/cancelar-compra` |
 
-Os testes de carrinho criam dinamicamente um usuário autenticado e um produto disponível. A fixture `carrinho_criado` captura o estoque original do produto antes de criar o carrinho, permitindo validar os efeitos de concluir e cancelar compra sobre o estoque.
+A fixture `carrinho_criado` captura o estoque original do produto antes de criar o carrinho, permitindo validar os efeitos de concluir e cancelar compra sobre o estoque.
+
+---
+
+### Testes de contrato com JSON Schema — 11 testes
+
+Os testes de contrato validam a **estrutura** das respostas usando `jsonschema.validate()`. Eles são complementares aos testes funcionais: enquanto os testes funcionais verificam status code, mensagens e regras de negócio, os testes de contrato verificam se os campos obrigatórios continuam presentes e com os tipos esperados.
+
+Os schemas ficam em `schemas/` e são importados diretamente nos testes.
+
+| Teste                                | Endpoint              | O que valida                                            |
+| ------------------------------------ | --------------------- | ------------------------------------------------------- |
+| `test_schema_listar_usuarios`        | GET `/usuarios`       | `quantidade` e array `usuarios` com campos obrigatórios |
+| `test_schema_cadastrar_usuario`      | POST `/usuarios`      | `message` e `_id`                                       |
+| `test_schema_buscar_usuario_por_id`  | GET `/usuarios/{id}`  | estrutura completa de um usuário                        |
+| `test_schema_login_sucesso`          | POST `/login`         | `message` e `authorization` no padrão `Bearer .+`       |
+| `test_schema_login_erro_credenciais` | POST `/login`         | `message` de erro                                       |
+| `test_schema_listar_produtos`        | GET `/produtos`       | `quantidade` e array `produtos` com campos obrigatórios |
+| `test_schema_cadastrar_produto`      | POST `/produtos`      | `message` e `_id`                                       |
+| `test_schema_buscar_produto_por_id`  | GET `/produtos/{id}`  | estrutura completa de um produto                        |
+| `test_schema_listar_carrinhos`       | GET `/carrinhos`      | `quantidade` e array `carrinhos` com campos de carrinho |
+| `test_schema_criar_carrinho`         | POST `/carrinhos`     | `message` e `_id`                                       |
+| `test_schema_buscar_carrinho_por_id` | GET `/carrinhos/{id}` | estrutura completa de um carrinho                       |
 
 ---
 
 ## Total de testes
 
-**51 testes automatizados** distribuídos em 4 endpoints.
+**62 testes automatizados** distribuídos entre testes funcionais, regras de negócio, segurança básica e contrato.
 
-| Endpoint     | Testes |
-| ------------ | -----: |
-| `/usuarios`  |     12 |
-| `/login`     |      8 |
-| `/produtos`  |     17 |
-| `/carrinhos` |     14 |
-| **Total**    | **51** |
+| Categoria               | Arquivo             | Testes |
+| ----------------------- | ------------------- | -----: |
+| Funcionais `/usuarios`  | `test_usuarios.py`  |     12 |
+| Funcionais `/login`     | `test_login.py`     |      8 |
+| Funcionais `/produtos`  | `test_produtos.py`  |     17 |
+| Funcionais `/carrinhos` | `test_carrinhos.py` |     14 |
+| Contrato JSON Schema    | `test_contratos.py` |     11 |
+| **Total**               |                     | **62** |
 
 ---
 
 ## Análise de cobertura
 
-A análise de cobertura foi feita com base na matriz inicial de cenários planejados no `PLANO-DE-TESTES.md`.
+A análise de cobertura foi feita com base na **matriz inicial de cenários planejados** no `PLANO-DE-TESTES.md`.
 
-O método utilizado foi:
-
-```text
-Cobertura = (cenários automatizados / cenários planejados) × 100
-```
-
-A primeira versão do plano previa **60 cenários** no total:
+A matriz inicial previa **60 cenários**:
 
 | Grupo             | Cenários planejados inicialmente |
 | ----------------- | -------------------------------: |
@@ -291,63 +327,79 @@ A primeira versão do plano previa **60 cenários** no total:
 | Fluxos integrados |                                3 |
 | **Total**         |                           **60** |
 
-Ao final do projeto, foram implementados **51 testes automatizados**:
+Após a implementação dos testes funcionais e dos testes de contrato, a suíte passou a cobrir **53 dos 60 cenários da matriz inicial**.
 
-| Grupo             | Implementados | Pendentes | Total planejado | Cobertura |
-| ----------------- | ------------: | --------: | --------------: | --------: |
-| `/usuarios`       |            12 |         0 |              12 |      100% |
-| `/login`          |             8 |         0 |               8 |      100% |
-| `/produtos`       |            17 |         3 |              20 |       85% |
-| `/carrinhos`      |            14 |         3 |              17 |    82,35% |
-| Fluxos integrados |             0 |         3 |               3 |        0% |
-| **Total**         |        **51** |     **9** |          **60** |   **85%** |
-
-Cálculo da cobertura total:
+O cálculo utilizado foi:
 
 ```text
-Cobertura = (51 / 60) × 100
-Cobertura = 85%
+Cobertura = (cenários da matriz inicial cobertos / cenários planejados inicialmente) × 100
+Cobertura = (53 / 60) × 100
+Cobertura = 88,33%
 ```
 
-Portanto, a cobertura total atingida pela suíte foi de **85%** em relação à matriz inicial de cenários planejados.
+| Métrica                                    | Resultado |
+| ------------------------------------------ | --------: |
+| Cenários planejados inicialmente           |        60 |
+| Cenários da matriz inicial cobertos        |        53 |
+| Cenários ainda pendentes da matriz inicial |         7 |
+| Cobertura da matriz inicial                |    88,33% |
+| Testes funcionais/regra/segurança          |        51 |
+| Testes de contrato com JSON Schema         |        11 |
+| Total de testes automatizados              |        62 |
 
-### Cenários que ficaram fora da automação
+### Cenários ainda pendentes da matriz inicial
 
-| Cenário fora da automação                                              | Justificativa                                                                                                         |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Validação formal da estrutura de item retornado em `GET /produtos`     | A listagem de produtos foi testada, mas sem validação detalhada de schema para cada item da lista.                    |
-| Atualização de produto com ID inexistente criando novo produto         | Cenário específico da regra de `PUT`; foi deixado para investigação futura para evitar criação residual indevida.     |
-| Tentativa de excluir produto vinculado a carrinho                      | Depende de estado compartilhado entre produto e carrinho; pode ser explorado em investigação futura.                  |
-| Validação formal da estrutura dos itens retornados em `GET /carrinhos` | A listagem foi testada, mas sem validação detalhada de schema para cada item.                                         |
-| Criação de carrinho sem campo `produtos`                               | Cenário negativo válido, mas não automatizado nesta etapa.                                                            |
-| Criação de carrinho com lista de produtos vazia                        | Cenário negativo válido, mas não automatizado nesta etapa.                                                            |
-| Fluxo integrado F-01 — ciclo completo de compra                        | Parte do comportamento foi coberta nos testes de carrinho, mas o fluxo E2E completo não foi isolado em teste próprio. |
-| Fluxo integrado F-02 — ciclo de cancelamento                           | Parte do comportamento foi coberta nos testes de carrinho, mas o fluxo E2E completo não foi isolado em teste próprio. |
-| Fluxo integrado F-03 — produto em uso                                  | Cenário relacionado à tentativa de excluir produto vinculado a carrinho; permanece como investigação futura.          |
+| Cenário pendente                                          | Justificativa                                                                                                |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Atualizar produto com ID inexistente criando novo produto | Cenário específico da regra de `PUT`; pode gerar criação residual e exige investigação isolada.              |
+| Tentar excluir produto vinculado a carrinho               | Depende de estado compartilhado entre produto e carrinho; permanece como investigação futura.                |
+| Criar carrinho sem campo `produtos`                       | Cenário negativo válido, mas não automatizado nesta versão.                                                  |
+| Criar carrinho com lista de produtos vazia                | Cenário negativo válido, mas não automatizado nesta versão.                                                  |
+| Fluxo integrado F-01 — ciclo completo de compra           | Parte do comportamento foi coberta nos testes de carrinho, mas o fluxo E2E não foi isolado em teste próprio. |
+| Fluxo integrado F-02 — ciclo de cancelamento              | Parte do comportamento foi coberta nos testes de carrinho, mas o fluxo E2E não foi isolado em teste próprio. |
+| Fluxo integrado F-03 — produto em uso                     | Relacionado à tentativa de excluir produto vinculado a carrinho; permanece como investigação futura.         |
 
-Embora a cobertura total por cenários seja de **85%**, a suíte cobre os principais endpoints e métodos HTTP definidos no escopo do projeto.
+Os testes de contrato com JSON Schema cobriram dois cenários da matriz inicial que antes estavam pendentes: a validação estrutural da listagem de produtos e a validação estrutural da listagem de carrinhos. Os demais testes de contrato foram considerados testes adicionais de robustez do contrato, não novos cenários da matriz inicial.
 
-| Endpoint                     | Métodos cobertos |
-| ---------------------------- | ---------------- |
-| `/usuarios`                  | GET, POST        |
-| `/usuarios/{id}`             | GET, PUT, DELETE |
-| `/login`                     | POST             |
-| `/produtos`                  | GET, POST        |
-| `/produtos/{id}`             | GET, PUT, DELETE |
-| `/carrinhos`                 | GET, POST        |
-| `/carrinhos/{id}`            | GET              |
-| `/carrinhos/concluir-compra` | DELETE           |
-| `/carrinhos/cancelar-compra` | DELETE           |
+---
+
+## CI/CD com GitHub Actions
+
+O arquivo `.github/workflows/tests.yml` configura a execução automática da suíte completa.
+
+Gatilhos:
+
+* `push` em qualquer branch
+* `pull_request` em qualquer branch
+
+Ambiente:
+
+* Ubuntu latest
+* Python 3.13
+
+Passos principais:
+
+```text
+checkout → configurar Python → instalar dependências → executar pytest → gerar relatório HTML → publicar artefato
+```
+
+Comando executado no workflow:
+
+```bash
+pytest -vv --html=reports/relatorio.html --self-contained-html
+```
+
+O relatório HTML é publicado como artefato da execução e fica disponível na aba **Actions** do GitHub.
 
 ---
 
 ## Investigação exploratória e bug report
 
-Durante o desenvolvimento do projeto, além dos testes automatizados, foi realizada uma **investigação manual exploratória** usando o **Postman** para verificar comportamentos da API que os testes automatizados não cobriam diretamente.
+Durante o desenvolvimento, foi realizada uma **investigação manual exploratória** usando o **Postman** para verificar comportamentos da API que os testes automatizados não cobriam diretamente.
 
-Essa investigação identificou um comportamento inconsistente na ServeRest: ao tentar excluir um recurso (`/usuarios` ou `/produtos`) por um ID válido, mas inexistente, a API retorna **200 OK** com `"Nenhum registro excluído"` em vez de um erro 4xx. Esse comportamento pode mascarar problemas em integrações que esperam uma indicação explícita de falha ao tentar remover algo que não existe.
+Essa investigação identificou um comportamento inconsistente na ServeRest: ao tentar excluir um recurso (`/usuarios` ou `/produtos`) por um ID válido, mas inexistente, a API retorna **200 OK** com `"Nenhum registro excluído"` em vez de um erro 4xx.
 
-O resultado da investigação foi documentado na **Issue #1** do repositório:
+O resultado foi documentado na **Issue #1** do repositório:
 
 [DELETE retorna 200 OK ao tentar excluir recurso inexistente](https://github.com/kanan-lopes/serverest-pytest-usuarios_DesafioBootcamp/issues/1)
 
@@ -356,18 +408,19 @@ O resultado da investigação foi documentado na **Issue #1** do repositório:
 ## Padrões do projeto
 
 * **Client pattern** — cada endpoint tem um client dedicado; nenhum `requests.*` é usado diretamente nos testes.
+* **JSON Schema** — schemas organizados por endpoint em `schemas/`; validação via `jsonschema.validate()`.
 * **Data factory** — payloads são gerados dinamicamente com `uuid4`, evitando conflitos entre execuções.
 * **Fixtures com yield** — pré-condição antes do `yield`, limpeza depois, garantindo isolamento mesmo em falhas.
-* **Independência total** — cada teste cria e limpa seus próprios dados; nenhum depende de outro.
-* **Marcadores** — `@pytest.mark.usuarios`, `@pytest.mark.login`, `@pytest.mark.produtos`, `@pytest.mark.carrinhos`.
+* **Independência total** — cada teste cria e limpa seus próprios dados.
+* **Marcadores** — `@pytest.mark.usuarios`, `@pytest.mark.login`, `@pytest.mark.produtos`, `@pytest.mark.carrinhos`, `@pytest.mark.contrato`.
+* **Relatório HTML** — geração com `pytest-html` para anexação como evidência.
+* **CI/CD** — execução automática da suíte via GitHub Actions.
 
 ---
 
-## Desafios extras opcionais
+## Extras implementados
 
-Os seguintes desafios extras foram considerados, mas não foram implementados nesta versão:
-
-| Extra                                                                             | Status           |
-| --------------------------------------------------------------------------------- | ---------------- |
-| Validação de estrutura das respostas usando JSON Schema em pelo menos 3 endpoints | Não implementado |
-| Configuração de GitHub Actions para rodar os testes automaticamente a cada push   | Não implementado |
+| Extra                                                                        | Status       | Evidência                            |
+| ---------------------------------------------------------------------------- | ------------ | ------------------------------------ |
+| Validar estrutura das respostas usando JSON Schema em pelo menos 3 endpoints | Implementado | 11 testes de contrato em 4 endpoints |
+| Configurar GitHub Actions para rodar os testes automaticamente a cada push   | Implementado | `.github/workflows/tests.yml`        |
